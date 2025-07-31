@@ -36,10 +36,7 @@ class SharedMemory:
         original_rtracker_reg = resource_tracker.register
 
         try:
-            if create is True:
-                shm = BuiltinSharedMemory(name, True, size)
-                self.created_shms.append(shm)
-            elif create is False:
+            if create is False:
                 # Avoid tracking shared memory resources in a process who attaches to an existing
                 # shared memory block because the process who created the shared memory is
                 # responsible for destroying the shared memory block.
