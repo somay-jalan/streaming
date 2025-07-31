@@ -220,6 +220,15 @@ class S3Downloader(CloudDownloader):
                                           local,
                                           ExtraArgs=extra_args,
                                           Config=TransferConfig(use_threads=False))
+        #MY CODE _ SOMAY JALAN
+
+        except NoCredentialsError:
+
+            # Recreate the s3 client as public (unsigned) and retry.
+
+            self._create_s3_client(unsigned=True, timeout=timeout)
+
+            self._download_file_impl(remote, local, timeout)
         except ClientError as e:
             if e.response['Error']['Code'] in BOTOCORE_CLIENT_ERROR_CODES:
                 e.args = (
