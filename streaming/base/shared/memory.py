@@ -4,25 +4,20 @@
 """Improved quiet implementation of shared memory in pure python."""
 
 import atexit
+import logging
+import threading
 from multiprocessing import resource_tracker  # pyright: ignore
 from multiprocessing.shared_memory import SharedMemory as BuiltinSharedMemory
 from time import sleep
 from typing import Any, Optional
 
 from streaming.base.constant import TICK
-
+logger = logging.getLogger(__name__)
 
 class SharedMemory:
-    """Improved quiet implementation of shared memory.
+    """Improved quiet implementation of shared memory with better synchronization."""
 
-    Args:
-        name (str, optional): A unique shared memory block name. Defaults to ``None``.
-        create (bool, optional): Creates a new shared memory block or attaches to an existing
-            shared memory block. Defaults to ``None``.
-        size (int, optional): A size of a shared memory block. Defaults to ``0``.
-        auto_cleanup (bool, optional): Register atexit handler for cleanup or not. Defaults to
-            ``True``.
-    """
+    _cleanup_lock = threading.Lock()  # Class-level lock for cleanup operations
 
     def __init__(self,
                  name: Optional[str] = None,
@@ -31,106 +26,126 @@ class SharedMemory:
                  auto_cleanup: bool = True):
         self.created_shms = []
         self.opened_shms = []
+        self.name = name
+        self._cleaned_up = False
         shm = None
-        # save the original register tracker function
+        
+        # Save original tracker functions
         original_rtracker_reg = resource_tracker.register
-        print("INSIDE SHARED MEMORY")
-        print(name,create,size,auto_cleanup)
 
-        try:
-            if create is False:
-                try:
-                    # Avoid tracking shared memory resources in a process who attaches to an existing
-                    # shared memory block because the process who created the shared memory is
-                    # responsible for destroying the shared memory block.
-                    resource_tracker.register = self.fix_register
-                    # Attaches to an existing shared memory block
-                    shm = BuiltinSharedMemory(name, create, size)
-                    self.opened_shms.append(shm)
-                except FileNotFoundError:
-                    if size > 0:
-                        print(f"creating with {name} {create} {size}")
-                        # Creates a new shared memory block
+        max_retries = 5
+        retry_delay = TICK
+
+        for attempt in range(max_retries):
+            try:
+                if create is False:
+                    try:
+                        # Avoid tracking shared memory resources in a process who attaches
+                        resource_tracker.register = self.fix_register
+                        # Attach to existing shared memory block
+                        shm = BuiltinSharedMemory(name, create, size)
+                        self.opened_shms.append(shm)
+                        break
+                    except FileNotFoundError:
+                        if size > 0:
+                            logger.info(f"Creating shared memory {name} with size {size}")
+                            # Create new shared memory block
+                            shm = BuiltinSharedMemory(name, True, size)
+                            self.created_shms.append(shm)
+                            break
+                        else:
+                            if attempt < max_retries - 1:
+                                sleep(retry_delay * (attempt + 1))
+                                continue
+                            raise FileNotFoundError(f"{name} not found and {size} is 0.")
+
+                else:
+                    try:
+                        # Create new shared memory block
                         shm = BuiltinSharedMemory(name, True, size)
                         self.created_shms.append(shm)
-                    else:
-                        raise FileNotFoundError(f"{name} not found and {size} is 0.")
+                        break
+                    except FileExistsError:
+                        sleep(TICK)
+                        resource_tracker.register = self.fix_register
+                        # Attach to existing shared memory block
+                        shm = BuiltinSharedMemory(name, False, size)
+                        self.opened_shms.append(shm)
+                        break
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Attempt {attempt + 1} failed: {e}, retrying...")
+                            sleep(retry_delay * (attempt + 1))
+                            continue
+                        raise
 
-            else:
-                try:
-                    # Creates a new shared memory block
-                    shm = BuiltinSharedMemory(name, True, size)
-                    self.created_shms.append(shm)
-                except FileExistsError:
-                    sleep(TICK)
-                    resource_tracker.register = self.fix_register
-                    # Attaches to an existing shared memory block
-                    shm = BuiltinSharedMemory(name, False, size)
-                    self.opened_shms.append(shm)
-            self.shm = shm
-        finally:
-            resource_tracker.register = original_rtracker_reg
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"SharedMemory creation attempt {attempt + 1} failed: {e}")
+                    sleep(retry_delay * (attempt + 1))
+                    continue
+                else:
+                    logger.error(f"Failed to create/attach SharedMemory after {max_retries} attempts")
+                    raise
+            finally:
+                resource_tracker.register = original_rtracker_reg
+
+        if shm is None:
+            raise RuntimeError(f"Failed to create or attach to shared memory {name}")
+
+        self.shm = shm
 
         if auto_cleanup:
-            # atexit handler doesn't get called if the program is killed by a signal not
-            # handled by python or when os.exit() is called or for any python internal fatal error.
             atexit.register(self.cleanup)
 
     @property
     def buf(self) -> memoryview:
-        """Internal buffer accessor.
-
-        Returns:
-            memoryview: Internal buffer.
-        """
+        """Internal buffer accessor."""
+        if self.shm is None:
+            raise RuntimeError("SharedMemory has been cleaned up")
         return self.shm.buf
 
-    # Monkey-patched "multiprocessing.resource_tracker" to skip unwanted resource tracker warnings.
-    # PR to remove resource tracker unlinking: https://github.com/python/cpython/pull/15989
     def fix_register(self, name: str, rtype: str) -> Any:
-        """Skip registering resource tracking for shared memory.
-
-        Args:
-            name (str): Name of a shared memory
-            rtype (str): Name of a resource type
-
-        Returns:
-            Any: resource tracker or None
-        """
+        """Skip registering resource tracking for shared memory."""
         if rtype == 'shared_memory':
             return
         return resource_tracker._resource_tracker.register(self, name, rtype)
 
     def fix_unregister(self, name: str, rtype: str) -> Any:
-        """Skip un-registering resource tracking for shared memory.
-
-        Args:
-            name (str): Name of a shared memory
-            rtype (str): Name of a resource type
-
-        Returns:
-            Any: resource tracker or None
-        """
+        """Skip un-registering resource tracking for shared memory."""
         if rtype == 'shared_memory':
             return
         return resource_tracker._resource_tracker.unregister(self, name, rtype)
 
     def cleanup(self):
-        """Clean up SharedMemory resources."""
-        # save the original unregister tracker function
-        original_rtracker_unreg = resource_tracker.unregister
+        """Clean up SharedMemory resources with proper synchronization."""
+        with self._cleanup_lock:
+            if self._cleaned_up:
+                return
+                
+            # Save original unregister tracker function
+            original_rtracker_unreg = resource_tracker.unregister
 
-        # Close each SharedMemory instance
-        try:
-            for shm in self.created_shms:
-                shm.close()
-                # Destroy the shared memory block
-                shm.unlink()
-            for shm in self.opened_shms:
-                resource_tracker.unregister = self.fix_unregister
-                shm.close()
-        # skip the error if a child process already cleaned up the shared memory
-        except FileNotFoundError:
-            pass
-        finally:
-            resource_tracker.unregister = original_rtracker_unreg
+            try:
+                # Close created SharedMemory instances
+                for shm in self.created_shms:
+                    try:
+                        shm.close()
+                        shm.unlink()
+                    except Exception as e:
+                        logger.warning(f"Error cleaning up created shared memory: {e}")
+
+                # Close opened SharedMemory instances
+                for shm in self.opened_shms:
+                    try:
+                        resource_tracker.unregister = self.fix_unregister
+                        shm.close()
+                    except Exception as e:
+                        logger.warning(f"Error cleaning up opened shared memory: {e}")
+
+            except Exception as e:
+                logger.warning(f"Error during SharedMemory cleanup: {e}")
+            finally:
+                resource_tracker.unregister = original_rtracker_unreg
+                self._cleaned_up = True
+
