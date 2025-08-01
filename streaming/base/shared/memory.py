@@ -33,7 +33,7 @@ class SharedMemory:
         # Save original tracker functions
         original_rtracker_reg = resource_tracker.register
 
-        max_retries = 5
+        max_retries = 10
         retry_delay = TICK
 
         for attempt in range(max_retries):
