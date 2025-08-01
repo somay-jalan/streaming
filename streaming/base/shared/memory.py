@@ -34,6 +34,8 @@ class SharedMemory:
         shm = None
         # save the original register tracker function
         original_rtracker_reg = resource_tracker.register
+        print("INSIDE SHARED MEMORY")
+        print(name,create,size,auto_cleanup)
 
         try:
             if create is False:
