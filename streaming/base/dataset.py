@@ -1050,6 +1050,9 @@ class StreamingDataset(Array, IterableDataset):
         else:
             self._shared_barrier(u_world.workers_per_node)
             epoch_sample_ids, shape_shm, data_shm = self._attach_work()
+        
+        print("INSIDE STREAMING DATASET")
+        print(p_world.node, p_world.rank_of_node,p_world.worker_of_rank)
 
         # Each worker gets their portion of the work.
         worker_sample_ids = epoch_sample_ids[p_world.node, p_world.rank_of_node,
