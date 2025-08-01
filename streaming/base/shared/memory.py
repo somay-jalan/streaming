@@ -55,6 +55,7 @@ class SharedMemory:
                             break
                         else:
                             if attempt < max_retries - 1:
+                                print(f"sleeping for{name} {create} {size} for attempt {attempt}")
                                 sleep(retry_delay * (attempt + 1))
                                 continue
                             raise FileNotFoundError(f"{name} not found and {size} is 0.")
