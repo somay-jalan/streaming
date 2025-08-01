@@ -39,13 +39,22 @@ class SharedMemory:
 
         try:
             if create is False:
-                # Avoid tracking shared memory resources in a process who attaches to an existing
-                # shared memory block because the process who created the shared memory is
-                # responsible for destroying the shared memory block.
-                resource_tracker.register = self.fix_register
-                # Attaches to an existing shared memory block
-                shm = BuiltinSharedMemory(name, create, size)
-                self.opened_shms.append(shm)
+                try:
+                    # Avoid tracking shared memory resources in a process who attaches to an existing
+                    # shared memory block because the process who created the shared memory is
+                    # responsible for destroying the shared memory block.
+                    resource_tracker.register = self.fix_register
+                    # Attaches to an existing shared memory block
+                    shm = BuiltinSharedMemory(name, create, size)
+                    self.opened_shms.append(shm)
+                except FileNotFoundError:
+                    if size > 0:
+                        # Creates a new shared memory block
+                        shm = BuiltinSharedMemory(name, True, size)
+                        self.created_shms.append(shm)
+                    else:
+                        raise FileNotFoundError(f"{name} not found and {size} is 0.")
+
             else:
                 try:
                     # Creates a new shared memory block
