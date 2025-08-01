@@ -49,6 +49,7 @@ class SharedMemory:
                     self.opened_shms.append(shm)
                 except FileNotFoundError:
                     if size > 0:
+                        print(f"creating with {name} {create} {size}")
                         # Creates a new shared memory block
                         shm = BuiltinSharedMemory(name, True, size)
                         self.created_shms.append(shm)
